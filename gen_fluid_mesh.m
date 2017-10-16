@@ -18,6 +18,7 @@ szFlLumen = 'seg-5.inp';
 % x_org = mNL(i, 2:2);
 % while abs(mNL(i+1, 2:2)-x_org) < 1e-4
 %     i = i + 1;
+
 % end
 % %cNLS = i;
 cNLS = 36;
@@ -38,7 +39,7 @@ for iNLS = 1:cLS
     if iNLS > 1
         if abs(distancePoints3d(mean(mNLS(:, 2:4, iNLS-1)), mean(mNLS(:, 2:4, iNLS)))) < 0.001
             if cLSRS == 0
-                cLSRS = iNLS-1;
+                cLSRS = iNLS;
             end
         elseif cLSRS ~= 0 && cLSRE == 0
             if abs(distancePoints3d(mean(mNLS(:, 2:4, iNLS-1)), mean(mNLS(:, 2:4, iNLS)))) > 0.001
@@ -137,67 +138,69 @@ end
         % rotate node back to global coordinates NITC_i
         % append NITC_i node id, coordinates in FSN
 mTrans = [];
+mNFS = []; mNF = [];
+nLSadj = cLSRS - (cLSRE - cLSRS) + 1; cFS = 0;
 for iNLS = 1:cLS
-    %if iNLS >= cLSRS-(cLSRE-cLSRS) || iNLS >= cLSRE
-        
-        
-    %mL_p = fitPlane(mNLS(:, 2:4, iNLS));
-    mNLS_2d = planePosition(mNLS(:, 2:4, iNLS), mPLS(:,:,iNLS));
-    mNLS_sp = cart2sph2d(horzcat(mNLS_2d, zeros(cNLS, 1)));
-    if debug, figure; hold on, end;
-    if debug, drawPoint3d(sph2cart2d(mNLS_sp)), end
-
-    nRotate = mNLS_sp(1, 2);
-    for i = 1:cNLS
-        nAngle = mNLS_sp(i, 2)-nRotate;
-        if nAngle < 0
-            nAngle = 360.0 + nAngle;
-        elseif nAngle > 360.0
-            nAngle = nAngle - 360.0;
+    if iNLS < cLSRS || iNLS > cLSRE
+        cFS = cFS + 1;
+        if iNLS >= nLSadj && iNLS <= cLSRS % in the adjusted zone
+            mNLS_2d = planePosition(mNLS(:, 2:4, iNLS+nLSadj), mPLS(:,:,iNLS+nLSadj));
+        else
+            mNLS_2d = planePosition(mNLS(:, 2:4, iNLS), mPLS(:,:,iNLS));
         end
-        mNLS_sp(i, 2) = nAngle;
+
+        %mL_p = fitPlane(mNLS(:, 2:4, iNLS));
+        %mNLS_2d = planePosition(mNLS(:, 2:4, iNLS), mPLS(:,:,iNLS));
+        mNLS_sp = cart2sph2d(horzcat(mNLS_2d, zeros(cNLS, 1)));
+        if debug, figure; hold on, end;
+        if debug, drawPoint3d(sph2cart2d(mNLS_sp)), end
+
+        nRotate = mNLS_sp(1, 2);
+        for i = 1:cNLS
+            nAngle = mNLS_sp(i, 2)-nRotate;
+            if nAngle < 0
+                nAngle = 360.0 + nAngle;
+            elseif nAngle > 360.0
+                nAngle = nAngle - 360.0;
+            end
+            mNLS_sp(i, 2) = nAngle;
+        end
+
+        mNLI_sp = []; mNLI_2d = []; mNLI_id = [];
+        for j = 1:cNII
+            nID = mNINC(:, :, j);
+            dT = (mNIA_sp(j, 2)-mNIC_sp(nID(1), 2));      if abs(dT) > 2.0*360.0/cNLS, dT = dT - sign(dT)*360; end;
+            dI = (mNIC_sp(nID(2), 2)-mNIC_sp(nID(1), 2)); if abs(dI) > 2.0*360.0/cNLS, dI = dI - sign(dI)*360; end;
+            dA = (mNLS_sp(nID(2), 2)-mNLS_sp(nID(1), 2)); if abs(dA) > 2.0*360.0/cNLS, dA = dA - sign(dA)*360; end;
+            nT = mNLS_sp(nID(1), 2)+dA*(dT/dI);
+            if j < 2
+                if debug, [ j nT mNINC(:, :, j) mNIA_sp(j, 2) mNIC_sp(nID(1), 2) mNIC_sp(nID(2), 2) mNLS_sp(nID(1), 2) mNLS_sp(nID(2), 2)], end
+            end
+            if debug, mTrans = [ mTrans; [ iNLS, j nT dI dT dA mNINC(:, :, j) mNIA_sp(j, 2) mNIC_sp(nID(1), 2) mNIC_sp(nID(2), 2) mNLS_sp(nID(1), 2) mNLS_sp(nID(2), 2)] dI dA], end
+
+            nT = nT + nRotate;
+            if nT > 180.0
+                nT = nT - 360.0;
+            elseif nT < -180.0
+                nT = 360.0 + nT;
+            end
+            nR = mNIA_sp(j,3)*(mNLS_sp(nID(1),3)*dT/dI + mNLS_sp(nID(2),3)*(1-dT/dI));
+
+            mNLI_sp = [ mNLI_sp; [ mNIA_sp(j, 1) nT nR ] ];
+            mNLI_id = [ mNLI_id; nNLIB+nNLIS*(iNLS-1)+mNI1N(j, 1)-(cNI1IS-1) ];
+            mNLI_2d = [ mNLI_2d; sph2cart2d(mNLI_sp(j,:)) ];
+            if debug, drawPoint3d(mNLI_2d(j, :)), end
+        end
+        mNLI(:, :, iNLS) = horzcat(mNLI_id, planePoint(mPLS(:,:,iNLS), sph2cart2d(mNLI_sp(:,:))));
+        mNFS(:, :, iNLS) = [ mNLS(:, :, iNLS); mNLI(:, :, iNLS) ];
+        mNF = [ mNF; mNLS(:, :, iNLS); mNLI(:, :, iNLS) ];
     end
-
-    mNLI_sp = []; mNLI_2d = []; mNLI_id = [];
-    for j = 1:cNII
-        nID = mNINC(:, :, j);
-        dT = (mNIA_sp(j, 2)-mNIC_sp(nID(1), 2));      if abs(dT) > 2.0*360.0/cNLS, dT = dT - sign(dT)*360; end;
-        dI = (mNIC_sp(nID(2), 2)-mNIC_sp(nID(1), 2)); if abs(dI) > 2.0*360.0/cNLS, dI = dI - sign(dI)*360; end;
-        dA = (mNLS_sp(nID(2), 2)-mNLS_sp(nID(1), 2)); if abs(dA) > 2.0*360.0/cNLS, dA = dA - sign(dA)*360; end;
-        nT = mNLS_sp(nID(1), 2)+dA*(dT/dI);
-        if j < 2
-            if debug, [ j nT mNINC(:, :, j) mNIA_sp(j, 2) mNIC_sp(nID(1), 2) mNIC_sp(nID(2), 2) mNLS_sp(nID(1), 2) mNLS_sp(nID(2), 2)], end
-        end
-        if debug, mTrans = [ mTrans; [ iNLS, j nT dI dT dA mNINC(:, :, j) mNIA_sp(j, 2) mNIC_sp(nID(1), 2) mNIC_sp(nID(2), 2) mNLS_sp(nID(1), 2) mNLS_sp(nID(2), 2)] dI dA], end
-
-        nT = nT + nRotate;
-        if nT > 180.0
-            nT = nT - 360.0;
-        elseif nT < -180.0
-            nT = 360.0 + nT;
-        end
-
-        
-        % dR1 = (mNIA_sp(j, 2)-mNIC_sp(nID(2), 2))/dI;
-        % dR2 = (mNIC_sp(nID(1), 2)-mNIA_sp(j, 2))/dI;
-        % nR = mNIA_sp(j, 3)*(dR1*mNLS_sp(nID(1), 3) + dR2*mNLS_sp(nID(2), 3));
-
-        nR = mNIA_sp(j,3)*(mNLS_sp(nID(1),3)*dT/dI + mNLS_sp(nID(2),3)*(1-dT/dI));
-
-        mNLI_sp = [ mNLI_sp; [ mNIA_sp(j, 1) nT nR ] ];
-        mNLI_id = [ mNLI_id; nNLIB+nNLIS*(iNLS-1)+mNI1N(j, 1)-(cNI1IS-1) ];
-        mNLI_2d = [ mNLI_2d; sph2cart2d(mNLI_sp(j,:)) ];
-        if debug, drawPoint3d(mNLI_2d(j, :)), end
-    end
-    %mNLI(:, :, iNLS) = horzcat(mNLI_id, planePoint(mL_p, sph2cart2d(mNLI_sp(:,:))));
-    mNLI(:, :, iNLS) = horzcat(mNLI_id, planePoint(mPLS(:,:,iNLS), sph2cart2d(mNLI_sp(:,:))));
-    mNFS(:, :, iNLS) = [ mNLS(:, :, iNLS); mNLI(:, :, iNLS) ];
 end
 
 % for N-Batch between RS-(RE-RS) and RE
-mEF = [];
+mEF = []; mEFS = [];
 for iELS = 1:cLS-1
-    mEFS=[];
+    mEFNS = [];
     for iEI = 1:size(mEI,1)
         mEFN = [mEI(iEI,1)+nNLIS*(iELS)];
         for iE = 2:size(mEI,2)
@@ -213,9 +216,10 @@ for iELS = 1:cLS-1
                 mEFN = horzcat(mEFN, mEI(iEI, iE)-20000+(nNLIB+nNLIS*(iELS)));
             end
         end
-                            
+        mEFNS = [mEFNS; mEFN];
     end
-    mEF(:, :, iELS) = mEFS;
+    mEFS(:, :, iELS) = mEFNS;
+    mEF = [ mEF; mEFNS ];
 end
 
 % for N-batch in S-1
@@ -229,11 +233,14 @@ fprintf(fid, '** PARTS\n');
 fprintf(fid, '**\n');
 fprintf(fid, '*Part, name=blood\n');
 fprintf(fid, '*Node\n');
-for iLS = 1:cLS
-    for iNLS = 1:cNI
-        fprintf(fid, '%u, %f, %f, %f\n', mNFS(iNLS, 1, iLS), mNFS(iNLS, 2, iLS), mNFS(iNLS, 3, iLS), mNFS(iNLS, 4, iLS));
-    end
+for iNF = 1:size(mNF,1)
+    fprintf(fid, '%u, %f, %f, %f\n', mNF(iNF, 1), mNF(iNF, 2), mNF(iNF, 3), mNF(iNF, 4));
 end
+% % for iLS = 1:cLS
+% %     for iNLS = 1:cNI
+% %         fprintf(fid, '%u, %f, %f, %f\n', mNFS(iNLS, 1, iLS), mNFS(iNLS, 2, iLS), mNFS(iNLS, 3, iLS), mNFS(iNLS, 4, iLS));
+% %     end
+% % end
 % fclose(fid)
 % for iLS = 1:cLS
 %     dlmwrite(szFlOut,mNFS(:, :, iLS),'precision','%.6f'), '-append');
@@ -243,11 +250,14 @@ fprintf(fid, '*Element, type=FC3D8\n');
 % for iLS = 1:cLS-1
 %     dlmwrite(szFlOut,mEF(:, :, iLS), '-append');
 % end
-for iLS = 1:cLS-1
-    for iE = 1:cEI
-        fprintf(fid, '%u, %u, %u, %u, %u, %u, %u, %u, %u\n', mEF(iE, 1, iLS), mEF(iE, 2, iLS), mEF(iE, 3, iLS), mEF(iE, 4, iLS), mEF(iE, 5, iLS), mEF(iE, 6, iLS), mEF(iE, 7, iLS), mEF(iE, 8, iLS), mEF(iE, 9, iLS));
-    end
+for iE = 1:size(mEF,1)
+    fprintf(fid, '%u, %u, %u, %u, %u, %u, %u, %u, %u\n', mEF(iE, 1), mEF(iE, 2), mEF(iE, 3), mEF(iE, 4), mEF(iE, 5), mEF(iE, 6), mEF(iE, 7), mEF(iE, 8), mEF(iE, 9));
 end
+% % for iLS = 1:cLS-1
+% %     for iE = 1:cEI
+% %         fprintf(fid, '%u, %u, %u, %u, %u, %u, %u, %u, %u\n', mEF(iE, 1, iLS), mEF(iE, 2, iLS), mEF(iE, 3, iLS), mEF(iE, 4, iLS), mEF(iE, 5, iLS), mEF(iE, 6, iLS), mEF(iE, 7, iLS), mEF(iE, 8, iLS), mEF(iE, 9, iLS));
+% %     end
+% % end
 fprintf(fid, '*End Part\n');
 fprintf(fid, '**\n');
 fprintf(fid, '**\n');
@@ -260,4 +270,3 @@ fprintf(fid, '*End Instance\n');
 fprintf(fid, '**\n');
 fprintf(fid, '*End Assembly\n');
 fclose(fid)
-
