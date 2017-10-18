@@ -1,14 +1,16 @@
 clc; clear all ;
-debug = 0;
+dbg = 0;
 
 % generate fluid mesh
+% [ id (1),  x,y,z (2:4)  r,t,p (5:7)  r,t (8:9) ]
 
 % read in lumen mesh [ node-set NL and S4R-element-set EL ]
 szDir = 'mesh';
 szFlLumen = 'seg-1-36.inp';
 szFlLumen = 'seg-5.inp';
-%szFlLumen = 'seg-all-noEndFace.inp';
-%szFlLumen = 'seg-36-end.inp';
+szFlLumen = 'seg-36-end.inp';
+%szFlLumen = 'seg-1.inp';
+%szFlLumen = 'seg-10-end.inp';
 
 [ mNL, mEL ] = read_input(strcat(szDir, '\', szFlLumen ));
 
@@ -18,6 +20,7 @@ szFlLumen = 'seg-5.inp';
 % x_org = mNL(i, 2:2);
 % while abs(mNL(i+1, 2:2)-x_org) < 1e-4
 %     i = i + 1;
+
 % end
 % %cNLS = i;
 cNLS = 36;
@@ -33,12 +36,12 @@ cLS = size(mNL, 1)/cNLS;
 cLSRS = 0; cLSRE = 0;
 mNLS = []; mPLS = [];
 for iNLS = 1:cLS
-    mNLS(:, :, iNLS) = mNL((iNLS-1)*cNLS+1:iNLS*cNLS, 1:4);
+    mNLS(:, :, iNLS) = [ mNL((iNLS-1)*cNLS+1:iNLS*cNLS, 1:4) zeros(cNLS, 5)] ;
     p = fitPlane(mNLS(:, 2:4, iNLS));
     if iNLS > 1
         if abs(distancePoints3d(mean(mNLS(:, 2:4, iNLS-1)), mean(mNLS(:, 2:4, iNLS)))) < 0.001
             if cLSRS == 0
-                cLSRS = iNLS-1;
+                cLSRS = iNLS;
             end
         elseif cLSRS ~= 0 && cLSRE == 0
             if abs(distancePoints3d(mean(mNLS(:, 2:4, iNLS-1)), mean(mNLS(:, 2:4, iNLS)))) > 0.001
@@ -47,7 +50,8 @@ for iNLS = 1:cLS
         end
     end
                 
-  mPLS(:, :, iNLS) = p;
+  mPLS = [ mPLS; p ];
+  mNLS(:, 8:9, iNLS) = planePosition(mNLS(:, 2:4, iNLS), mPLS(iNLS, :));
 end
 nNLIS = 10^(round(log10(max(mNL(:, 1)))+0.5));
 nNLIB = 10*nNLIS;
@@ -105,8 +109,7 @@ for i = 1:cNII
 end
 
 % for internal nodes, get two NIC whose NIA <= & > its NIA, store NINC
-mNIA_sp_assoc = horzcat(mNIA_sp, zeros(99, 2));
-mNINC = [];
+mNIA_sp = horzcat(mNIA_sp, zeros(99, 3));
 for i = 1:cNII
     bFound = 0;
     for j = 1:cNLS-1
@@ -117,11 +120,9 @@ for i = 1:cNII
         end
     end
     if bFound == 0
-        mNINC(:,:,i) = [ cNLS, 1 ]; 
-        mNIA_sp_assoc(i, 4:5) = [ cNLS, 1 ];
+        mNIA_sp(i, 4:6) = [ mNI1N(i, 1)-(cNI1IS-1), cNLS, 1 ];
     else
-        mNINC(:,:,i) = [ j, j+1 ];
-        mNIA_sp_assoc(i, 4:5) = [ j, j+1 ];
+        mNIA_sp(i, 4:6) = [ mNI1N(i, 1)-(cNI1IS-1), j, j+1 ];
     end
 end
 
@@ -137,127 +138,134 @@ end
         % rotate node back to global coordinates NITC_i
         % append NITC_i node id, coordinates in FSN
 mTrans = [];
+mNFS = []; mNF = [];
+nLSadj = cLSRS - (cLSRE - cLSRS) - 1; cFS = 0; nMid = 0;
 for iNLS = 1:cLS
-    %if iNLS >= cLSRS-(cLSRE-cLSRS) || iNLS >= cLSRE
-        
-        
-    %mL_p = fitPlane(mNLS(:, 2:4, iNLS));
-    mNLS_2d = planePosition(mNLS(:, 2:4, iNLS), mPLS(:,:,iNLS));
-    mNLS_sp = cart2sph2d(horzcat(mNLS_2d, zeros(cNLS, 1)));
-    if debug, figure; hold on, end;
-    if debug, drawPoint3d(sph2cart2d(mNLS_sp)), end
-
-    nRotate = mNLS_sp(1, 2);
-    for i = 1:cNLS
-        nAngle = mNLS_sp(i, 2)-nRotate;
-        if nAngle < 0
-            nAngle = 360.0 + nAngle;
-        elseif nAngle > 360.0
-            nAngle = nAngle - 360.0;
+    if iNLS < cLSRS || iNLS > cLSRE
+        cFS = cFS + 1;
+        if iNLS >= nLSadj && iNLS < cLSRS % in the adjusted zone
+            iNLS_adj = iNLS+nLSadj; nMid = nMid + 1;
+            mNLS_2d_adj = planePosition(mNLS(:, 2:4, iNLS_adj), mPLS(cLSRS-1, :));
+            p_mid = [ mPLS(iNLS-1, 1:3)+0.5*(mPLS(iNLS, 1:3)-mPLS(iNLS-1, 1:3)) mPLS(iNLS, 4:9) ];
+        else
+            iNLS_adj = iNLS;
+            mNLS_2d_adj = mNLS(:, 8:9, iNLS_adj);
+            p_mid = [];
         end
-        mNLS_sp(i, 2) = nAngle;
+
+        [ mNFSN_2d ] = gen_internal_nodes(mNLS_2d_adj, mNIC_sp, mNIA_sp, mTrans, iNLS, dbg);
+
+        nNLI_base = nNLIB+nNLIS*(iNLS-1);
+
+        % IF in replase section
+        % - add a plane based on XYZ = XYZ-1 + (XYZ-2 - XYZ-1)/2, dXdYdZ, XnYnZn
+        % - add mNFS based on this plane NOTE need new IDs for outer nodes
+        % increment cFS by one
+        if ~isempty(p_mid)
+            mNFS(1:cNLS, :, cFS) = [ mNLS(1:cNLS, 1, cLS)+cNLS*nMid, planePoint(p_mid, mNLS_2d_adj) ];
+            mNFS(cNLS+1:cNLS+cNII, :, cFS) = [ mNIA_sp(1:cNII, 4)+nNLIB+nNLIS*(cFS-1), planePoint(p_mid, mNFSN_2d) ];
+            mNF = [ mNF; mNFS(:, :, cFS) ];
+            cFS = cFS+1; nMid = nMid + 1;
+            mNFS(1:cNLS, :, cFS) = [ mNLS(1:cNLS, 1, cLS)+cNLS*nMid, planePoint(mPLS(iNLS, :), mNLS_2d_adj) ];
+            mNFS(cNLS+1:cNLS+cNII, :, cFS) = [ mNIA_sp(1:cNII, 4)+nNLIB+nNLIS*(cFS-1), planePoint(mPLS(iNLS,:), mNFSN_2d) ];
+            mNF = [ mNF; mNFS(:, :, cFS) ];
+        else
+            mNFS(1:cNLS, :, cFS) = [ mNLS(1:cNLS, 1, iNLS_adj), planePoint(mPLS(iNLS, :), mNLS_2d_adj) ];
+            mNFS(cNLS+1:cNLS+cNII, :, cFS) = [ mNIA_sp(1:cNII, 4)+nNLIB+nNLIS*(cFS-1), planePoint(mPLS(iNLS,:), mNFSN_2d) ];
+            mNF = [ mNF; mNFS(:, :, cFS) ];
+        end
     end
-
-    mNLI_sp = []; mNLI_2d = []; mNLI_id = [];
-    for j = 1:cNII
-        nID = mNINC(:, :, j);
-        dT = (mNIA_sp(j, 2)-mNIC_sp(nID(1), 2));      if abs(dT) > 2.0*360.0/cNLS, dT = dT - sign(dT)*360; end;
-        dI = (mNIC_sp(nID(2), 2)-mNIC_sp(nID(1), 2)); if abs(dI) > 2.0*360.0/cNLS, dI = dI - sign(dI)*360; end;
-        dA = (mNLS_sp(nID(2), 2)-mNLS_sp(nID(1), 2)); if abs(dA) > 2.0*360.0/cNLS, dA = dA - sign(dA)*360; end;
-        nT = mNLS_sp(nID(1), 2)+dA*(dT/dI);
-        if j < 2
-            if debug, [ j nT mNINC(:, :, j) mNIA_sp(j, 2) mNIC_sp(nID(1), 2) mNIC_sp(nID(2), 2) mNLS_sp(nID(1), 2) mNLS_sp(nID(2), 2)], end
-        end
-        if debug, mTrans = [ mTrans; [ iNLS, j nT dI dT dA mNINC(:, :, j) mNIA_sp(j, 2) mNIC_sp(nID(1), 2) mNIC_sp(nID(2), 2) mNLS_sp(nID(1), 2) mNLS_sp(nID(2), 2)] dI dA], end
-
-        nT = nT + nRotate;
-        if nT > 180.0
-            nT = nT - 360.0;
-        elseif nT < -180.0
-            nT = 360.0 + nT;
-        end
-
-        
-        % dR1 = (mNIA_sp(j, 2)-mNIC_sp(nID(2), 2))/dI;
-        % dR2 = (mNIC_sp(nID(1), 2)-mNIA_sp(j, 2))/dI;
-        % nR = mNIA_sp(j, 3)*(dR1*mNLS_sp(nID(1), 3) + dR2*mNLS_sp(nID(2), 3));
-
-        nR = mNIA_sp(j,3)*(mNLS_sp(nID(1),3)*dT/dI + mNLS_sp(nID(2),3)*(1-dT/dI));
-
-        mNLI_sp = [ mNLI_sp; [ mNIA_sp(j, 1) nT nR ] ];
-        mNLI_id = [ mNLI_id; nNLIB+nNLIS*(iNLS-1)+mNI1N(j, 1)-(cNI1IS-1) ];
-        mNLI_2d = [ mNLI_2d; sph2cart2d(mNLI_sp(j,:)) ];
-        if debug, drawPoint3d(mNLI_2d(j, :)), end
-    end
-    %mNLI(:, :, iNLS) = horzcat(mNLI_id, planePoint(mL_p, sph2cart2d(mNLI_sp(:,:))));
-    mNLI(:, :, iNLS) = horzcat(mNLI_id, planePoint(mPLS(:,:,iNLS), sph2cart2d(mNLI_sp(:,:))));
-    mNFS(:, :, iNLS) = [ mNLS(:, :, iNLS); mNLI(:, :, iNLS) ];
 end
 
 % for N-Batch between RS-(RE-RS) and RE
-mEF = [];
-for iELS = 1:cLS-1
-    mEFS=[];
+mEF = []; mEFS = [];
+for iEFS = 1:cFS-1
+    mEFNS = [];
     for iEI = 1:size(mEI,1)
-        mEFN = [mEI(iEI,1)+nNLIS*(iELS)];
+        mEFN = [mEI(iEI,1)+nNLIS*(iEFS)]; % Element ID
         for iE = 2:size(mEI,2)
-            if mEI(iEI, iE) < cNI1IS
-                if mEI(iEI, iE) < 200
-                    mEFN = horzcat(mEFN, mNLS(mEI(iEI, iE)-100, 1, iELS));
+            if mEI(iEI, iE) < cNI1IS % circumfrential node
+                if mEI(iEI, iE) < 200 % circumfrential nodes of 1st or 2nd segment
+                    mEFN = horzcat(mEFN, mNFS(mEI(iEI, iE)-100, 1, iEFS));
                 else
-                    mEFN = horzcat(mEFN, mNLS(mEI(iEI, iE)-200, 1, iELS+1));
+                    mEFN = horzcat(mEFN, mNFS(mEI(iEI, iE)-200, 1, iEFS+1));
                 end
-            elseif mEI(iEI, iE) < 20000
-                mEFN = horzcat(mEFN, mEI(iEI, iE)-10000+(nNLIB+nNLIS*(iELS-1)));
-            else
-                mEFN = horzcat(mEFN, mEI(iEI, iE)-20000+(nNLIB+nNLIS*(iELS)));
+            else % internal node
+                if mEI(iEI, iE) < 20000
+                    mEFN = horzcat(mEFN, mNFS(mEI(iEI, iE)-10000+cNLS, 1, iEFS));
+                else
+                    mEFN = horzcat(mEFN, mNFS(mEI(iEI, iE)-20000+cNLS, 1, iEFS+1));
+                end
             end
         end
-                            
+        mEFNS = [mEFNS; mEFN];
     end
-    mEF(:, :, iELS) = mEFS;
+    mEFS(:, :, iEFS) = mEFNS;
+    mEF = [ mEF; mEFNS ];
 end
 
-% for N-batch in S-1
-    % get FSN and FSN+1
-    % calculate and store element references in FSE
+% Fill in the outer sections of the end
+cFSO = 0; nLAYER = cLSRE-cLSRS;
+for iNFSO = 1:nLAYER
+    nPTSadd = 0;
+    mNMID_2d = planePosition(mNLS(1:cNLS, 2:4, cLSRE-iNFSO), mPLS(cLSRS-1, :));
+    for iMID = 1:iNFSO
+        cFSO = cFSO + 1;  nMid = nMid + 1; nPTSadd = nPTSadd+1;
+
+        mNMID = planePoint(mPLS(cLSRS-iNFSO+(iMID-1), :), mNMID_2d);
+        mNFSO(1:cNLS, :, cFSO) = [ mNLS(1:cNLS, 1, cLS)+cNLS*nMid mNMID ];
+        mNF = [ mNF; mNFSO(:, :, cFSO) ];
+
+        if iMID == 1
+            mEFSO(:, :, cFSO) = gen_outer_elem(mEF(end,1), mNFS(1:cNLS,1,cLSRE-(2*iNFSO-1)), mNFS(1:cNLS,1,cLSRE-(2*iNFSO)), mNFS(1:cNLS,1,cLSRE-(iNFSO-1)*2), mNFSO(1:cNLS, :, cFSO));
+            mEF = [ mEF; mEFSO(:, :, cFSO) ];
+            m34 = [ mNFS(1:cNLS,1,cLSRE-(iNFSO-1)*2), mNFSO(1:cNLS, :, cFSO) ];
+         else
+             mEFSO(:, :, cFSO) = gen_outer_elem(mEF(end,1), m34(:,1), m34(:,2), mNFSO(1:cNLS, 1, cFSO-iNFSO), mNFSO(1:cNLS, 1, cFSO));
+             mEF = [ mEF; mEFSO(:, :, cFSO) ];
+             m34 = [ mNFSO(1:cNLS, 1, cFSO-iNFSO), mNFSO(1:cNLS, 1, cFSO) ];
+        end
+    end
+end
+
+% Add remining outer end segments
+m34 = [mNFS(1:cNLS,1,cLSRS-(cLSRE-cLSRS)-1), mNFS(1:cNLS,1,cLSRS-(cLSRE-cLSRS)-2)]; nPTSadd = 0;
+for iNFSO = cLSRS-(cLSRE-cLSRS)-1:cLSRS-1       
+    cFSO = cFSO + 1; nPTSadd = nPTSadd + 1;
+    mNFSO(1:cNLS, :, cFSO) = [ mNLS(1:cNLS, 1:4, iNFSO) ];
+    mNF = [ mNF; mNFSO(:, :, cFSO) ];
+
+    if nPTSadd == 1
+        mEFSO(:, :, cFSO) = gen_outer_elem(mEF(end,1), mNFS(1:cNLS,1,cLSRS-(cLSRE-cLSRS)-1), mNFS(1:cNLS,1,cLSRS-(cLSRE-cLSRS)-2), mNFS(1:cNLS,1,cLSRS-(cLSRE-cLSRS)), mNFSO(1:cNLS, :, cFSO));
+        mEF = [ mEF; mEFSO(:, :, cFSO) ];
+        m34 = [ mNFS(1:cNLS,1,cLSRE-(iNFSO-1)*2), mNFSO(1:cNLS, :, cFSO) ];
+     else
+         mEFSO(:, :, cFSO) = gen_outer_elem(mEF(end,1), m34(:,1), m34(:,2), mNFSO(1:cNLS, 1, iNFSO-1), mNFSO(1:cNLS, 1, cFSO));
+         mEF = [ mEF; mEFSO(:, :, cFSO) ];
+         m34 = [ mNFSO(1:cNLS, 1, iNFSO-1), mNFSO(1:cNLS, 1, cFSO) ];
+    end
+end
+
+% Write out nodes and elements
 szFlOut = 'test.inp';
 fid = fopen(strcat(szDir, '\', szFlOut),'wt');
-fprintf(fid, '*Heading\n');
-fprintf(fid, '**\n');
-fprintf(fid, '** PARTS\n');
-fprintf(fid, '**\n');
+fprintf(fid, '*Heading\n**\n');
+fprintf(fid, '** PARTS\n**\n');
 fprintf(fid, '*Part, name=blood\n');
 fprintf(fid, '*Node\n');
-for iLS = 1:cLS
-    for iNLS = 1:cNI
-        fprintf(fid, '%u, %f, %f, %f\n', mNFS(iNLS, 1, iLS), mNFS(iNLS, 2, iLS), mNFS(iNLS, 3, iLS), mNFS(iNLS, 4, iLS));
-    end
+for iNF = 1:size(mNF,1)
+    fprintf(fid, '%u, %f, %f, %f\n', mNF(iNF, 1), mNF(iNF, 2), mNF(iNF, 3), mNF(iNF, 4));
 end
-% fclose(fid)
-% for iLS = 1:cLS
-%     dlmwrite(szFlOut,mNFS(:, :, iLS),'precision','%.6f'), '-append');
-% end
-% fid = fopen(szFlOut,'a+');
+
 fprintf(fid, '*Element, type=FC3D8\n');
-% for iLS = 1:cLS-1
-%     dlmwrite(szFlOut,mEF(:, :, iLS), '-append');
-% end
-for iLS = 1:cLS-1
-    for iE = 1:cEI
-        fprintf(fid, '%u, %u, %u, %u, %u, %u, %u, %u, %u\n', mEF(iE, 1, iLS), mEF(iE, 2, iLS), mEF(iE, 3, iLS), mEF(iE, 4, iLS), mEF(iE, 5, iLS), mEF(iE, 6, iLS), mEF(iE, 7, iLS), mEF(iE, 8, iLS), mEF(iE, 9, iLS));
-    end
+for iE = 1:size(mEF,1)
+    fprintf(fid, '%u, %u, %u, %u, %u, %u, %u, %u, %u\n', mEF(iE, 1), mEF(iE, 2), mEF(iE, 3), mEF(iE, 4), mEF(iE, 5), mEF(iE, 6), mEF(iE, 7), mEF(iE, 8), mEF(iE, 9));
 end
-fprintf(fid, '*End Part\n');
-fprintf(fid, '**\n');
-fprintf(fid, '**\n');
-fprintf(fid, '** ASSEMBLY\n');
-fprintf(fid, '**\n');
-fprintf(fid, '*Assembly, name=Assembly\n');
-fprintf(fid, '**\n');
+
+fprintf(fid, '*End Part\n**\n**\n');
+fprintf(fid, '** ASSEMBLY\n**\n');
+fprintf(fid, '*Assembly, name=Assembly\n**\n');
 fprintf(fid, '*Instance, name=blood-1, part=blood\n');
-fprintf(fid, '*End Instance\n');
-fprintf(fid, '**\n');
+fprintf(fid, '*End Instance\n**\n');
 fprintf(fid, '*End Assembly\n');
 fclose(fid)
-
