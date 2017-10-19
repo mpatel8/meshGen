@@ -9,8 +9,8 @@ szDir = 'mesh';
 szFlLumen = 'seg-1-36.inp';
 szFlLumen = 'seg-5.inp';
 szFlLumen = 'seg-36-end.inp';
-%szFlLumen = 'seg-1.inp';
-%szFlLumen = 'seg-10-end.inp';
+szFlLumen = 'seg-10-end.inp';
+szFlLumen = 'seg-all.inp';
 
 [ mNL, mEL ] = read_input(strcat(szDir, '\', szFlLumen ));
 
@@ -32,27 +32,27 @@ cNLS = 36;
 % store each N-batch in a separate list, NS
 % store each plane info, PS
 % note total number of actual segments T
-cLS = size(mNL, 1)/cNLS;
-cLSRS = 0; cLSRE = 0;
-mNLS = []; mPLS = [];
+cLS = size(mNL, 1)/cNLS; cLSRS = 0; cLSRE = 0; mmNLS = []; mPLS = [];cLSENDWIDE=10000
 for iNLS = 1:cLS
-    mNLS(:, :, iNLS) = [ mNL((iNLS-1)*cNLS+1:iNLS*cNLS, 1:4) zeros(cNLS, 5)] ;
-    p = fitPlane(mNLS(:, 2:4, iNLS));
+    mmNLS(:, :, iNLS) = [ mNL((iNLS-1)*cNLS+1:iNLS*cNLS, 1:4) zeros(cNLS, 5)] ;
+    p = fitPlane(mmNLS(:, 2:4, iNLS));
     if iNLS > 1
-        if abs(distancePoints3d(mean(mNLS(:, 2:4, iNLS-1)), mean(mNLS(:, 2:4, iNLS)))) < 0.001
+        if abs(distancePoints3d(mean(mmNLS(:, 2:4, iNLS-1)), mean(mmNLS(:, 2:4, iNLS)))) < 0.001
             if cLSRS == 0
+                cLSENDWIDE = iNLS-1;
                 cLSRS = iNLS;
             end
         elseif cLSRS ~= 0 && cLSRE == 0
-            if abs(distancePoints3d(mean(mNLS(:, 2:4, iNLS-1)), mean(mNLS(:, 2:4, iNLS)))) > 0.001
+            if abs(distancePoints3d(mean(mmNLS(:, 2:4, iNLS-1)), mean(mmNLS(:, 2:4, iNLS)))) > 0.001
                 cLSRE = iNLS-1;
             end
         end
     end
                 
   mPLS = [ mPLS; p ];
-  mNLS(:, 8:9, iNLS) = planePosition(mNLS(:, 2:4, iNLS), mPLS(iNLS, :));
+  mmNLS(:, 8:9, iNLS) = planePosition(mmNLS(:, 2:4, iNLS), mPLS(iNLS, :));
 end
+cLSTAPER = cLSENDWIDE - (cLSRE-cLSRS);
 nNLIS = 10^(round(log10(max(mNL(:, 1)))+0.5));
 nNLIB = 10*nNLIS;
 
@@ -84,8 +84,8 @@ mNI1N = mNI1(cNLS+1:size(mNI1, 1), :);
 mI_p = fitPlane(mNI1(:, 2:4));
 mNI1_2d = planePosition(mNI1(:,2:4), mI_p);
 mNI1_sp = cart2sph2d(horzcat(mNI1_2d, zeros(cNI, 1)));
-mNIC_sp = mNI1_sp(1:cNLS, :, :);
-mNIA_sp = mNI1_sp(cNLS+1:cNI, :, :);
+mNIC_sp = mNI1_sp(1:cNLS, :);
+mNIA_sp = mNI1_sp(cNLS+1:cNI, :);
 
 nRotate = mNIC_sp(1, 2);
 for i = 1:cNLS
@@ -113,7 +113,6 @@ mNIA_sp = horzcat(mNIA_sp, zeros(99, 3));
 for i = 1:cNII
     bFound = 0;
     for j = 1:cNLS-1
-%        if sign(a360(mNIA_sp(i, 2))-a360(mNIC_sp(j, 2))) ~= sign(a360(mNIA_sp(i, 2))-a360(mNIC_sp(j+1, 2)))
         if sign(mNIA_sp(i,2)-mNIC_sp(j,2)) ~= sign(mNIA_sp(i,2)-mNIC_sp(j+1,2))
             bFound = 1;
             break;
@@ -138,111 +137,105 @@ end
         % rotate node back to global coordinates NITC_i
         % append NITC_i node id, coordinates in FSN
 mTrans = [];
-mNFS = []; mNF = [];
-nLSadj = cLSRS - (cLSRE - cLSRS) - 1; cFS = 0; nMid = 0;
+mNF = []; mmNFS = [];
+mEF = []; mmEFS = [];
+nLSadj=cLSRS-(cLSRE-cLSRS)-1; cFS=0; cFSO=0; nNEW=0;
 for iNLS = 1:cLS
-    if iNLS < cLSRS || iNLS > cLSRE
-        cFS = cFS + 1;
-        if iNLS >= nLSadj && iNLS < cLSRS % in the adjusted zone
-            iNLS_adj = iNLS+nLSadj; nMid = nMid + 1;
-            mNLS_2d_adj = planePosition(mNLS(:, 2:4, iNLS_adj), mPLS(cLSRS-1, :));
-            p_mid = [ mPLS(iNLS-1, 1:3)+0.5*(mPLS(iNLS, 1:3)-mPLS(iNLS-1, 1:3)) mPLS(iNLS, 4:9) ];
+    % collate full segment info 
+    mNSFP_add=[]; % plane to transform the nodes into
+    mmNSFinf = []; % ids of outer nodes and their 2D coords reference
+    nS = 0; nR = 0;
+    if iNLS < cLSTAPER || iNLS > cLSRE % Normal main mesh or constriction section
+        nS = nS+1;
+        mmNSFinf(:,:,nS) = [ mmNLS(1:cNLS, 1, iNLS), planePosition(mmNLS(:, 2:4, iNLS), mPLS(iNLS, :)) ];
+        mNSFP_add = [ mNSFP_add; mPLS(iNLS, :) ];
+        
+    elseif iNLS <= cLSENDWIDE % between taperring section near end
+        % Add taper points based on end points (inner first then on segment)
+        % collate full segment info for each
+        nS = nS+1; nNEW = nNEW + 1; nENDS = cLSENDWIDE+(iNLS-cLSTAPER)+1;
+        mmNSFinf(:,:,nS) = [ mmNLS(1:cNLS, 1, cLS)+cNLS*nNEW, planePosition(mmNLS(:, 2:4, nENDS), mPLS(cLSENDWIDE, :)) ];
+        mNSFP_add = [ mNSFP_add; mPLS(iNLS-1, 1:3)+0.5*(mPLS(iNLS, 1:3)-mPLS(iNLS-1, 1:3)) mPLS(iNLS, 4:9) ];
+
+        nS = nS+1;
+        if nENDS < cLSRE
+            nNEW = nNEW + 1;
+            mmNSFinf(:,:,nS) = [ mmNLS(1:cNLS, 1, cLS)+cNLS*nNEW, planePosition(mmNLS(:, 2:4, nENDS), mPLS(cLSENDWIDE, :)) ];
         else
-            iNLS_adj = iNLS;
-            mNLS_2d_adj = mNLS(:, 8:9, iNLS_adj);
-            p_mid = [];
+            mmNSFinf(:,:,nS) = [ mmNLS(1:cNLS, 1, nENDS), planePosition(mmNLS(:, 2:4, nENDS), mPLS(cLSENDWIDE, :)) ];
         end
+        mNSFP_add = [ mNSFP_add; mPLS(iNLS, :) ];
 
-        [ mNFSN_2d ] = gen_internal_nodes(mNLS_2d_adj, mNIC_sp, mNIA_sp, mTrans, iNLS, dbg);
-
-        nNLI_base = nNLIB+nNLIS*(iNLS-1);
-
-        % IF in replase section
-        % - add a plane based on XYZ = XYZ-1 + (XYZ-2 - XYZ-1)/2, dXdYdZ, XnYnZn
-        % - add mNFS based on this plane NOTE need new IDs for outer nodes
-        % increment cFS by one
-        if ~isempty(p_mid)
-            mNFS(1:cNLS, :, cFS) = [ mNLS(1:cNLS, 1, cLS)+cNLS*nMid, planePoint(p_mid, mNLS_2d_adj) ];
-            mNFS(cNLS+1:cNLS+cNII, :, cFS) = [ mNIA_sp(1:cNII, 4)+nNLIB+nNLIS*(cFS-1), planePoint(p_mid, mNFSN_2d) ];
-            mNF = [ mNF; mNFS(:, :, cFS) ];
-            cFS = cFS+1; nMid = nMid + 1;
-            mNFS(1:cNLS, :, cFS) = [ mNLS(1:cNLS, 1, cLS)+cNLS*nMid, planePoint(mPLS(iNLS, :), mNLS_2d_adj) ];
-            mNFS(cNLS+1:cNLS+cNII, :, cFS) = [ mNIA_sp(1:cNII, 4)+nNLIB+nNLIS*(cFS-1), planePoint(mPLS(iNLS,:), mNFSN_2d) ];
-            mNF = [ mNF; mNFS(:, :, cFS) ];
-        else
-            mNFS(1:cNLS, :, cFS) = [ mNLS(1:cNLS, 1, iNLS_adj), planePoint(mPLS(iNLS, :), mNLS_2d_adj) ];
-            mNFS(cNLS+1:cNLS+cNII, :, cFS) = [ mNIA_sp(1:cNII, 4)+nNLIB+nNLIS*(cFS-1), planePoint(mPLS(iNLS,:), mNFSN_2d) ];
-            mNF = [ mNF; mNFS(:, :, cFS) ];
+        % if required add additional mesh points
+        for iPT = 1:iNLS-cLSTAPER
+            nR = nR+1;
+            if iNLS < cLSENDWIDE
+                nNEW = nNEW + 1;
+                mmNSFinf(:,:,nR+nS) = [ mmNLS(1:cNLS, 1, cLS)+cNLS*nNEW, planePosition(mmNLS(:, 2:4, nENDS-iPT), mPLS(cLSENDWIDE, :)) ];
+            else
+                mmNSFinf(:,:,nR+nS) = [ mmNLS(1:cNLS, 1, nENDS-iPT), planePosition(mmNLS(:, 2:4, nENDS-iPT), mPLS(cLSENDWIDE, :)) ];
+            end
+            mNSFP_add = [ mNSFP_add; mPLS(iNLS, :) ];
         end
+        nR = nR+1;
+        mmNSFinf(:,:,nR+nS) = [ mmNLS(1:cNLS, 1, iNLS), planePosition(mmNLS(:, 2:4, iNLS), mPLS(iNLS, :)) ];
+        mNSFP_add = [ mNSFP_add; mPLS(iNLS, :) ];
+        % if first additional point log first for straddle mesh ring
+        % collate remaining additional points to add ring of elements
+        % if no additional points log outer segment point for straddle mesh ring
+        % otherwise collate outer segment points to add ring of elements
     end
-end
-
-% for N-Batch between RS-(RE-RS) and RE
-mEF = []; mEFS = [];
-for iEFS = 1:cFS-1
-    mEFNS = [];
-    for iEI = 1:size(mEI,1)
-        mEFN = [mEI(iEI,1)+nNLIS*(iEFS)]; % Element ID
-        for iE = 2:size(mEI,2)
-            if mEI(iEI, iE) < cNI1IS % circumfrential node
-                if mEI(iEI, iE) < 200 % circumfrential nodes of 1st or 2nd segment
-                    mEFN = horzcat(mEFN, mNFS(mEI(iEI, iE)-100, 1, iEFS));
-                else
-                    mEFN = horzcat(mEFN, mNFS(mEI(iEI, iE)-200, 1, iEFS+1));
+    
+    for iS = 1:nS
+        [ mNFSN_2d ] = gen_internal_nodes(mmNSFinf(:,2:3,iS), mNIC_sp, mNIA_sp, mTrans, iNLS, dbg);
+        % add nodes to respective collections
+        cFS = cFS+1;
+        mmNFS(1:cNLS, :, cFS) = [ mmNSFinf(:,1,iS), planePoint(mNSFP_add(iS,:), mmNSFinf(:,2:3,iS)) ];
+        mmNFS(cNLS+1:cNLS+cNII, :, cFS) = [ mNIA_sp(1:cNII, 4)+nNLIB+nNLIS*(cFS-1), planePoint(mNSFP_add(iS,:), mNFSN_2d) ];
+        mNF = [ mNF; mmNFS(:, :, cFS) ];
+        
+        % for N-Batch between RS-(RE-RS) and RE
+        if cFS > 1
+            for iEFS = cFS-1:cFS-1
+                mEFNS = [];
+                for iEI = 1:size(mEI,1)
+                    mEFN = [mEI(iEI,1)+nNLIS*(iEFS)]; % Element ID
+                    for iE = 2:size(mEI,2)
+                        if mEI(iEI, iE) < cNI1IS % circumfrential node
+                            if mEI(iEI, iE) < 200 % circumfrential nodes of 1st or 2nd segment
+                                mEFN = horzcat(mEFN, mmNFS(mEI(iEI, iE)-100, 1, iEFS));
+                            else
+                                mEFN = horzcat(mEFN, mmNFS(mEI(iEI, iE)-200, 1, iEFS+1));
+                            end
+                        else % internal node
+                            if mEI(iEI, iE) < 20000
+                                mEFN = horzcat(mEFN, mmNFS(mEI(iEI, iE)-10000+cNLS, 1, iEFS));
+                            else
+                                mEFN = horzcat(mEFN, mmNFS(mEI(iEI, iE)-20000+cNLS, 1, iEFS+1));
+                            end
+                        end
+                    end
+                    mEFNS = [mEFNS; mEFN];
                 end
-            else % internal node
-                if mEI(iEI, iE) < 20000
-                    mEFN = horzcat(mEFN, mNFS(mEI(iEI, iE)-10000+cNLS, 1, iEFS));
-                else
-                    mEFN = horzcat(mEFN, mNFS(mEI(iEI, iE)-20000+cNLS, 1, iEFS+1));
-                end
+                mmEFS(:, :, iEFS) = mEFNS;
+                mEF = [ mEF; mEFNS ];
             end
         end
-        mEFNS = [mEFNS; mEFN];
-    end
-    mEFS(:, :, iEFS) = mEFNS;
-    mEF = [ mEF; mEFNS ];
-end
-
-% Fill in the outer sections of the end
-cFSO = 0; nLAYER = cLSRE-cLSRS;
-for iNFSO = 1:nLAYER
-    nPTSadd = 0;
-    mNMID_2d = planePosition(mNLS(1:cNLS, 2:4, cLSRE-iNFSO), mPLS(cLSRS-1, :));
-    for iMID = 1:iNFSO
-        cFSO = cFSO + 1;  nMid = nMid + 1; nPTSadd = nPTSadd+1;
-
-        mNMID = planePoint(mPLS(cLSRS-iNFSO+(iMID-1), :), mNMID_2d);
-        mNFSO(1:cNLS, :, cFSO) = [ mNLS(1:cNLS, 1, cLS)+cNLS*nMid mNMID ];
-        mNF = [ mNF; mNFSO(:, :, cFSO) ];
-
-        if iMID == 1
-            mEFSO(:, :, cFSO) = gen_outer_elem(mEF(end,1), mNFS(1:cNLS,1,cLSRE-(2*iNFSO-1)), mNFS(1:cNLS,1,cLSRE-(2*iNFSO)), mNFS(1:cNLS,1,cLSRE-(iNFSO-1)*2), mNFSO(1:cNLS, :, cFSO));
-            mEF = [ mEF; mEFSO(:, :, cFSO) ];
-            m34 = [ mNFS(1:cNLS,1,cLSRE-(iNFSO-1)*2), mNFSO(1:cNLS, :, cFSO) ];
-         else
-             mEFSO(:, :, cFSO) = gen_outer_elem(mEF(end,1), m34(:,1), m34(:,2), mNFSO(1:cNLS, 1, cFSO-iNFSO), mNFSO(1:cNLS, 1, cFSO));
-             mEF = [ mEF; mEFSO(:, :, cFSO) ];
-             m34 = [ mNFSO(1:cNLS, 1, cFSO-iNFSO), mNFSO(1:cNLS, 1, cFSO) ];
+    end    
+    
+    for iR = nS+1:nS+nR
+        cFSO = cFSO + 1;
+        mmNFSO(1:cNLS, :, cFSO) = [ mmNSFinf(:,1,iR), planePoint(mNSFP_add(iR,:), mmNSFinf(:,2:3,iR)) ];
+        mNF = [ mNF; mmNFSO(:, :, cFSO) ];
+        
+        if iR-nS == 1
+            mmEFSO(:, :, cFSO) = gen_outer_elem(mEF(end,1), mmNFS(1:cNLS,1,cFS-1), mmNFS(1:cNLS,1,cFS-2), mmNFS(1:cNLS,1,cFS), mmNFSO(1:cNLS, :, cFSO));
+        elseif iR-nS == 2
+            mmEFSO(:, :, cFSO) = gen_outer_elem(mEF(end,1), mmNFS(1:cNLS,1,cFS-2), mmNFSO(1:cNLS, :, cFSO-nR), mmNFSO(1:cNLS, :, cFSO-1), mmNFSO(1:cNLS, :, cFSO));
+        else
+            mmEFSO(:, :, cFSO) = gen_outer_elem(mEF(end,1), mmNFSO(1:cNLS, :, cFSO-nR-1), mmNFSO(1:cNLS, :, cFSO-nR), mmNFSO(1:cNLS, :, cFSO-1), mmNFSO(1:cNLS, :, cFSO));
         end
-    end
-end
-
-% Add remining outer end segments
-m34 = [mNFS(1:cNLS,1,cLSRS-(cLSRE-cLSRS)-1), mNFS(1:cNLS,1,cLSRS-(cLSRE-cLSRS)-2)]; nPTSadd = 0;
-for iNFSO = cLSRS-(cLSRE-cLSRS)-1:cLSRS-1       
-    cFSO = cFSO + 1; nPTSadd = nPTSadd + 1;
-    mNFSO(1:cNLS, :, cFSO) = [ mNLS(1:cNLS, 1:4, iNFSO) ];
-    mNF = [ mNF; mNFSO(:, :, cFSO) ];
-
-    if nPTSadd == 1
-        mEFSO(:, :, cFSO) = gen_outer_elem(mEF(end,1), mNFS(1:cNLS,1,cLSRS-(cLSRE-cLSRS)-1), mNFS(1:cNLS,1,cLSRS-(cLSRE-cLSRS)-2), mNFS(1:cNLS,1,cLSRS-(cLSRE-cLSRS)), mNFSO(1:cNLS, :, cFSO));
-        mEF = [ mEF; mEFSO(:, :, cFSO) ];
-        m34 = [ mNFS(1:cNLS,1,cLSRE-(iNFSO-1)*2), mNFSO(1:cNLS, :, cFSO) ];
-     else
-         mEFSO(:, :, cFSO) = gen_outer_elem(mEF(end,1), m34(:,1), m34(:,2), mNFSO(1:cNLS, 1, iNFSO-1), mNFSO(1:cNLS, 1, cFSO));
-         mEF = [ mEF; mEFSO(:, :, cFSO) ];
-         m34 = [ mNFSO(1:cNLS, 1, iNFSO-1), mNFSO(1:cNLS, 1, cFSO) ];
+        mEF = [ mEF; mmEFSO(:, :, cFSO) ];
     end
 end
 
