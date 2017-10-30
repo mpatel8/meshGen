@@ -6,10 +6,15 @@ fid = fopen(saFlInput,'rt') ;
 TXT = textscan(fid,'%s','Delimiter','\n');
 TXT = TXT{1} ;
 %% Get the line number of mises 
-idxS = strfind(TXT, 'Node');
-idx1 = find(not(cellfun('isempty', idxS)));
-idxS = strfind(TXT, 'Element');
-idx2 = find(not(cellfun('isempty', idxS)));
+idxN = strfind(TXT, 'Node');
+idx1 = find(not(cellfun('isempty', idxN)));
+idxE = strfind(TXT, 'Element');
+idx2 = find(not(cellfun('isempty', idxE)));
+if isempty(idx2)
+    idxE = strfind(TXT, 'ELEMENT');
+    idx2 = find(not(cellfun('isempty', idxE)));
+end
+idx2 = find(not(cellfun('isempty', idxE)));
 idxS = strfind(TXT, 'End');
 idx3 = find(not(cellfun('isempty', idxS)));
 % pick  nodes 

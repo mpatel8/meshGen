@@ -2,27 +2,29 @@ clc; clear all ;
 dbg = 0;
 
 % generate fluid mesh
-% [ id (1),  x,y,z (2:4)  r,t,p (5:7)  r,t (8:9) ]
+% [ id (1),  x,y,z (2:4)  p,t,r (5:7)  x,y (8) ]
 
 % read in lumen mesh [ node-set NL and S4R-element-set EL ]
 szDir = 'mesh';
-szFlLumen = 'seg-1-36.inp';
+%szFlLumen = 'seg-1-36.inp';
 szFlLumen = 'seg-5.inp';
 szFlLumen = 'seg-36-end.inp';
-szFlLumen = 'seg-10-end.inp';
-szFlLumen = 'seg-all.inp';
+%szFlLumen = 'seg-10-end.inp';
+%szFlLumen = 'seg-all.inp';
+%szFlLumen = 'lumen-S_A0039R_W9A1_FSI_Y2017M10D23H16M41.inp';
+szFlLumen = 'S_A0039R_W9A1_FEA_Y2017M10D05H12M13.inp';
 
 [ mNL, mEL ] = read_input(strcat(szDir, '\', szFlLumen ));
 
 % determine how many nodes per segment 'N' using first set of nodes that have
 % same X value [IDEALLY MAKE AVAILABLE VIA MESH INPUT FILE - OR VIA MATLAB CODE ]
-% i = 1; 
-% x_org = mNL(i, 2:2);
-% while abs(mNL(i+1, 2:2)-x_org) < 1e-4
-%     i = i + 1;
+i = 1; 
+x_org = mNL(i, 2:2);
+while abs(mNL(i+1, 2:2)-x_org) < 1e-4
+    i = i + 1;
 
-% end
-% %cNLS = i;
+end
+cNLS = i
 cNLS = 36;
 
 % look through each N nodes and get plane definition
@@ -32,7 +34,7 @@ cNLS = 36;
 % store each N-batch in a separate list, NS
 % store each plane info, PS
 % note total number of actual segments T
-cLS = size(mNL, 1)/cNLS; cLSRS = 0; cLSRE = 0; mmNLS = []; mPLS = [];cLSENDWIDE=10000
+cLS = size(mNL, 1)/cNLS; cLSRS = 0; cLSRE = 0; mmNLS = []; mPLS = [];cLSENDWIDE=10000;
 for iNLS = 1:cLS
     mmNLS(:, :, iNLS) = [ mNL((iNLS-1)*cNLS+1:iNLS*cNLS, 1:4) zeros(cNLS, 5)] ;
     p = fitPlane(mmNLS(:, 2:4, iNLS));
@@ -49,12 +51,111 @@ for iNLS = 1:cLS
         end
     end
                 
-  mPLS = [ mPLS; p ];
-  mmNLS(:, 8:9, iNLS) = planePosition(mmNLS(:, 2:4, iNLS), mPLS(iNLS, :));
+    mPLS = [ mPLS; p ];
+    mmNLS(:, 8:9, iNLS) = planePosition(mmNLS(:, 2:4, iNLS), mPLS(iNLS, :));
+    mmNLS(:, 5:7, iNLS) = cart2sph2d(horzcat(mmNLS(:, 8:9, iNLS), zeros(cNLS, 1)));
 end
-cLSTAPER = cLSENDWIDE - (cLSRE-cLSRS);
-nNLIS = 10^(round(log10(max(mNL(:, 1)))+0.5));
+if cLSENDWIDE == 0
+   cLSENDWIDE = cLS; 
+else
+    cLSTAPER = cLSENDWIDE - (cLSRE-cLSRS);
+end
+nNIDmax = mNL(end,1);
+mNF = []; mEF = []; 
+
+bBLadd = 1;
+if bBLadd == 1
+% define boundary layer as defined by first internal segment on rigid wide end or 10%
+% Splits the boundary into 5 layers, each 20% wider than before
+% Boundary layer is stored in BL and NLS is switched to inner layer
+mmNBL1 = mmNLS(:,:,1:cLSRS-1); % outer layer
+% mNF = reshape(permute(mmNBL1(:, 1:4,:),[1 3 2]),[],4,1);
+
+cBLgwth = 1.2; % growth factor of boundary layer
+cBLnum = 5;
+nBLtotal = 0;
+for i = 1:cBLnum
+    nBLtotal = nBLtotal+cBLgwth^(i-1);
+end
+cBLpct=0.1; % total pct of 
+if cLSRE - cLSRS > 0
+    mBLpct = [ mmNLS(:, 7, cLSRS-1) - mmNLS(:, 7, cLSRS)]./mmNLS(:, 7, cLSRS-1);
+else
+    mBLpct = repmat(cBLpct, cNLS, 1);
+end
+mBLLpct=[]; mBLLpctPrev=0;
+for iLAYER = 1:cBLnum
+    mBLLpctPrev = [ mBLLpctPrev + (cBLgwth^(iLAYER-1))*mBLpct/nBLtotal ];
+    %mmBLLpct(:, iLAYER) = 1-prevBLLpct;
+    mBLLpct = [ mBLLpct, 1-mBLLpctPrev ];
+end
+ 
+mmNBL=[]; mmEBL = []; 
+nEFmax = 0;
+for iNLS = 1:cLSENDWIDE
+    
+    % Node boundary layer
+    for iLAYER = 1:cBLnum+1
+        if iLAYER == 1 % outer layer 
+            mmNBL(:,:, iLAYER, iNLS) = mmNLS(:, :, iNLS);
+        elseif iNLS == cLSENDWIDE && iLAYER == cBLnum+1 % inside layer at wide end
+            mmNBL(:,:, iLAYER, iNLS) = mmNLS(:, :, cLSRS);
+        else
+            mSPH = [ mmNLS(:, 5:6, iNLS), mmNLS(:, 7, iNLS).*mBLLpct(:,iLAYER-1) ];
+            mCYL = sph2cart2d(mSPH);
+            m3D = planePoint(mPLS(iNLS, :), mCYL(:, 1:2));
+            mmNBL(:,:, iLAYER, iNLS) = [ mmNLS(:, 1, 1)+nNIDmax, m3D, mSPH, mCYL(:, 1:2) ];
+        end
+        mNF = [ mNF; mmNBL(:,1:4, iLAYER, iNLS) ];
+
+        % Add the elemebts
+        if iNLS > 1 && iLAYER > 1
+            mmEBL(:, :, iLAYER, iNLS-1) = gen_outer_elem(nEFmax, ...
+                                            mmNBL(:,1, iLAYER, iNLS-1), mmNBL(:,1, iLAYER-1, iNLS-1), ...
+                                            mmNBL(:,1, iLAYER, iNLS), mmNBL(:,1, iLAYER-1, iNLS));
+            mEF = [ mEF; mmEBL(:, :, iLAYER, iNLS-1) ];
+            nEFmax = max(mEF(:, 1));
+        end
+        if nNIDmax < mNF(end,1), nNIDmax = mNF(end,1); end;
+    end
+end
+
+
+mPLSadj=[];
+for iNLS = 1:cLSENDWIDE
+    mmNLSadj(:,:,iNLS) = mmNBL(:,:,cBLnum+1, iNLS);
+    mPLSadj = [ mPLSadj; mPLS(iNLS,:) ];
+end
+for iNLS = 1:cLS-cLSRS
+    mmNLSadj(:,:,iNLS+cLSENDWIDE) = mmNLS(:,:,iNLS+cLSRS);
+    mPLSadj = [ mPLSadj; mPLS(iNLS+cLSRS,:) ];
+end
+cLSENDWIDEadj = cLSENDWIDE;
+cLSRSadj = cLSRS;
+cLSREadj = cLSRE-1;
+cLSTAPERadj = cLSTAPER+1;
+cLSadj = cLS-1;
+
+
+else
+    mPLSadj=[];
+    for iNLS = 1:cLS
+        mmNLSadj(:,:,iNLS) = mmNLS(:,:,iNLS);
+    end
+    cLSENDWIDEadj = cLSENDWIDE;
+    cLSRSadj = cLSRS;
+    cLSREadj = cLSRE;
+    cLSTAPERadj = cLSTAPER;
+    cLSadj = cLS;
+end
+
+nNLIS = 10^(round(log10(nNIDmax)+0.5));
 nNLIB = 10*nNLIS;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+if 1 == 1    %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 
 % read in associalted idealised mesh (2 sets of nodes and 1 set of elements
 % store 1st N-batch of ideal nodes in temmplate set NI1
@@ -109,7 +210,7 @@ for i = 1:cNII
 end
 
 % for internal nodes, get two NIC whose NIA <= & > its NIA, store NINC
-mNIA_sp = horzcat(mNIA_sp, zeros(99, 3));
+mNIA_sp = horzcat(mNIA_sp, zeros(size(mNIA_sp, 1), 3));
 for i = 1:cNII
     bFound = 0;
     for j = 1:cNLS-1
@@ -137,49 +238,50 @@ end
         % rotate node back to global coordinates NITC_i
         % append NITC_i node id, coordinates in FSN
 mTrans = [];
-mNF = []; mmNFS = [];
-mEF = []; mmEFS = [];
-nLSadj=cLSRS-(cLSRE-cLSRS)-1; cFS=0; cFSO=0; nNEW=0;
-for iNLS = 1:cLS
+%mNF = []; mEF = [];
+mmNFS = []; mmEFS = [];
+nLSadj=cLSRSadj-(cLSREadj-cLSRSadj)-1; cFS=0; cFSO=0; nNEW=0;
+for iNLS = 1:cLSadj
     % collate full segment info 
     mNSFP_add=[]; % plane to transform the nodes into
     mmNSFinf = []; % ids of outer nodes and their 2D coords reference
     nS = 0; nR = 0;
-    if iNLS < cLSTAPER || iNLS > cLSRE % Normal main mesh or constriction section
+    if iNLS < cLSTAPERadj || iNLS > cLSREadj % Normal main mesh or constriction section
         nS = nS+1;
-        mmNSFinf(:,:,nS) = [ mmNLS(1:cNLS, 1, iNLS), planePosition(mmNLS(:, 2:4, iNLS), mPLS(iNLS, :)) ];
-        mNSFP_add = [ mNSFP_add; mPLS(iNLS, :) ];
-        
-    elseif iNLS <= cLSENDWIDE % between taperring section near end
+        mmNSFinf(:,:,nS) = [ mmNLSadj(1:cNLS, 1, iNLS), planePosition(mmNLSadj(:, 2:4, iNLS), mPLSadj(iNLS, :)) ];
+        mNSFP_add = [ mNSFP_add; mPLSadj(iNLS, :) ];
+
+    elseif iNLS <= cLSENDWIDEadj % between taperring section near end
         % Add taper points based on end points (inner first then on segment)
         % collate full segment info for each
-        nS = nS+1; nNEW = nNEW + 1; nENDS = cLSENDWIDE+(iNLS-cLSTAPER)+1;
-        mmNSFinf(:,:,nS) = [ mmNLS(1:cNLS, 1, cLS)+cNLS*nNEW, planePosition(mmNLS(:, 2:4, nENDS), mPLS(cLSENDWIDE, :)) ];
-        mNSFP_add = [ mNSFP_add; mPLS(iNLS-1, 1:3)+0.5*(mPLS(iNLS, 1:3)-mPLS(iNLS-1, 1:3)) mPLS(iNLS, 4:9) ];
+        nS = nS+1; nNEW = nNEW + 1; nENDS = cLSENDWIDEadj+(iNLS-cLSTAPERadj)+1;
+
+        mmNSFinf(:,:,nS) = [ mmNLSadj(1:cNLS, 1, cLSadj)+cNLS*nNEW+nNIDmax, planePosition(mmNLSadj(:, 2:4, nENDS), mPLSadj(cLSENDWIDEadj, :)) ];
+        mNSFP_add = [ mNSFP_add; mPLSadj(iNLS-1, 1:3)+0.5*(mPLSadj(iNLS, 1:3)-mPLSadj(iNLS-1, 1:3)) mPLSadj(iNLS, 4:9) ];
 
         nS = nS+1;
-        if nENDS < cLSRE
-            nNEW = nNEW + 1;
-            mmNSFinf(:,:,nS) = [ mmNLS(1:cNLS, 1, cLS)+cNLS*nNEW, planePosition(mmNLS(:, 2:4, nENDS), mPLS(cLSENDWIDE, :)) ];
+        if nENDS < cLSREadj
+            nNEW = nNEW + 1; 
+            mmNSFinf(:,:,nS) = [ mmNLSadj(1:cNLS, 1, cLSadj)+cNLS*nNEW+nNIDmax, planePosition(mmNLSadj(:, 2:4, nENDS), mPLSadj(cLSENDWIDEadj, :)) ];
         else
-            mmNSFinf(:,:,nS) = [ mmNLS(1:cNLS, 1, nENDS), planePosition(mmNLS(:, 2:4, nENDS), mPLS(cLSENDWIDE, :)) ];
+            mmNSFinf(:,:,nS) = [ mmNLSadj(1:cNLS, 1, nENDS), planePosition(mmNLSadj(:, 2:4, nENDS), mPLSadj(cLSENDWIDEadj, :)) ];
         end
-        mNSFP_add = [ mNSFP_add; mPLS(iNLS, :) ];
+        mNSFP_add = [ mNSFP_add; mPLSadj(iNLS, :) ];
 
         % if required add additional mesh points
-        for iPT = 1:iNLS-cLSTAPER
+        for iPT = 1:iNLS-cLSTAPERadj
             nR = nR+1;
-            if iNLS < cLSENDWIDE
+            if iNLS < cLSENDWIDEadj
                 nNEW = nNEW + 1;
-                mmNSFinf(:,:,nR+nS) = [ mmNLS(1:cNLS, 1, cLS)+cNLS*nNEW, planePosition(mmNLS(:, 2:4, nENDS-iPT), mPLS(cLSENDWIDE, :)) ];
+                mmNSFinf(:,:,nR+nS) = [ mmNLSadj(1:cNLS, 1, cLSadj)+cNLS*nNEW+nNIDmax, planePosition(mmNLSadj(:, 2:4, nENDS-iPT), mPLSadj(cLSENDWIDEadj, :)) ];
             else
-                mmNSFinf(:,:,nR+nS) = [ mmNLS(1:cNLS, 1, nENDS-iPT), planePosition(mmNLS(:, 2:4, nENDS-iPT), mPLS(cLSENDWIDE, :)) ];
+                mmNSFinf(:,:,nR+nS) = [ mmNLSadj(1:cNLS, 1, nENDS-iPT), planePosition(mmNLSadj(:, 2:4, nENDS-iPT), mPLSadj(cLSENDWIDEadj, :)) ];
             end
-            mNSFP_add = [ mNSFP_add; mPLS(iNLS, :) ];
+            mNSFP_add = [ mNSFP_add; mPLSadj(iNLS, :) ];
         end
         nR = nR+1;
-        mmNSFinf(:,:,nR+nS) = [ mmNLS(1:cNLS, 1, iNLS), planePosition(mmNLS(:, 2:4, iNLS), mPLS(iNLS, :)) ];
-        mNSFP_add = [ mNSFP_add; mPLS(iNLS, :) ];
+        mmNSFinf(:,:,nR+nS) = [ mmNLSadj(1:cNLS, 1, iNLS), planePosition(mmNLSadj(:, 2:4, iNLS), mPLSadj(iNLS, :)) ];
+        mNSFP_add = [ mNSFP_add; mPLSadj(iNLS, :) ];
         % if first additional point log first for straddle mesh ring
         % collate remaining additional points to add ring of elements
         % if no additional points log outer segment point for straddle mesh ring
@@ -239,8 +341,12 @@ for iNLS = 1:cLS
     end
 end
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+end %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 % Write out nodes and elements
-szFlOut = 'test.inp';
+szFlOut = strcat('fluid_', szFlLumen);
 fid = fopen(strcat(szDir, '\', szFlOut),'wt');
 fprintf(fid, '*Heading\n**\n');
 fprintf(fid, '** PARTS\n**\n');
@@ -253,6 +359,82 @@ end
 fprintf(fid, '*Element, type=FC3D8\n');
 for iE = 1:size(mEF,1)
     fprintf(fid, '%u, %u, %u, %u, %u, %u, %u, %u, %u\n', mEF(iE, 1), mEF(iE, 2), mEF(iE, 3), mEF(iE, 4), mEF(iE, 5), mEF(iE, 6), mEF(iE, 7), mEF(iE, 8), mEF(iE, 9));
+end
+
+if 1 == 0
+    % write out key sets
+    for i = 1:size(mEF,1)
+        if i == 1
+            fprintf(fid,'*Elset, elset=all\n');
+        end
+
+        if (i/16) == round(i/16) || i == size(mEF,1)
+            fprintf(fid,'%8u\n', mEF(i,1));
+        else
+            fprintf(fid,'%8u,', mEF(i,1));
+        end    
+    end
+
+    % inlet set - node and element
+    for i = 1:size(mmNFS,1)
+        if i == 1
+            fprintf(fid,'*Nset, nset=set_n_inlet\n');
+        end
+
+        if (i/16) == round(i/16) || i == size(mmNFS,1)
+            fprintf(fid,'%8u\n', mmNFS(i,1, 1));
+        else
+            fprintf(fid,'%8u,', mmNFS(i,1, 1));
+        end    
+    end
+    for i = 1:size(mmEFS,1)
+        if i == 1
+            fprintf(fid,'*Elset, elset=set_e_inlet\n');
+        end
+
+        if (i/16) == round(i/16) || i == size(mmEFS,1)
+            fprintf(fid,'%8u\n', mmEFS(i,1, 1));
+        else
+            fprintf(fid,'%8u,', mmEFS(i,1, 1));
+        end    
+    end
+
+    % outlet set - node and element
+    for i = 1:size(mmNFS,1)
+        if i == 1
+            fprintf(fid,'*Nset, nset=set_n_outlet\n');
+        end
+
+        if (i/16) == round(i/16) || i == size(mmNFS,1)
+            fprintf(fid,'%8u\n', mmNFS(i,1, end));
+        else
+            fprintf(fid,'%8u,', mmNFS(i,1, end));
+        end    
+    end
+    for i = 1:size(mmEFS,1)
+        if i == 1
+            fprintf(fid,'*Elset, elset=set_e_outlet\n');
+        end
+
+        if (i/16) == round(i/16) || i == size(mmEFS,1)
+            fprintf(fid,'%8u\n', mmEFS(i,1, end));
+        else
+            fprintf(fid,'%8u,', mmEFS(i,1, end));
+        end    
+    end
+
+    for i = 1:size(mNL,1)
+        if i == 1
+            fprintf(fid,'*Nset, nset=wall\n');
+        end
+
+        if (i/16) == round(i/16) || i == size(mNL,1)
+            fprintf(fid,'%8u\n', mNL(i,1));
+        else
+            fprintf(fid,'%8u,', mNL(i,1));
+        end    
+    end
+
 end
 
 fprintf(fid, '*End Part\n**\n**\n');
